@@ -1,0 +1,387 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using DeathWish.MockClient.Core;
+using DeathWish.Protocol;
+using UnityEngine;
+
+namespace DeathWish.Client
+{
+    public sealed class MovementTest : MonoBehaviour
+    {
+        private const float INPUT_INTERVAL_SECONDS = 1f / 30f;
+        private const float LOOK_SENSITIVITY = 2f;
+        private const float DEGREES_PER_TURN = 360f;
+        private const float EYE_HEIGHT_METERS = 1.6f;
+        private const float INTERPOLATION_SECONDS = 0.1f;
+        private const int TIMEOUT_SECONDS = 5;
+        private readonly Dictionary<long, GameObject> _players = new Dictionary<long, GameObject>();
+        private readonly Dictionary<long, Vector3> _from = new Dictionary<long, Vector3>();
+        private readonly Dictionary<long, Vector3> _targets = new Dictionary<long, Vector3>();
+        private ConnectionTestClient _client;
+        private CancellationTokenSource _cancellation;
+        private Camera _camera;
+        private Mesh _cube;
+        private Material _material;
+        private GameObject _world;
+        private string _host = "127.0.0.1";
+        private string _port = "7777";
+        private string _room = "1";
+        private string _status = "Disconnected";
+        private long _playerId;
+        private long _lastTick;
+        private uint _sequence;
+        private float _yawDegrees;
+        private float _pitchDegrees;
+        private float _nextInputSeconds;
+        private float _snapshotTimeSeconds;
+        private bool _isConnecting;
+        private bool _isSending;
+        private bool _hasFocus = true;
+        private int _generation;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void CreateScreen()
+        {
+            if (FindFirstObjectByType<MovementTest>() == null)
+            {
+                new GameObject("DeathWish Movement Test").AddComponent<MovementTest>();
+            }
+        }
+
+        private void Awake()
+        {
+            Application.runInBackground = true;
+            _cube = CreateCubeMesh();
+            Shader shader = Resources.Load<Shader>("DeathWishMovement");
+            if (shader == null || !shader.isSupported)
+            {
+                Debug.LogError("DeathWish movement shader is missing or unsupported. Run integrations/Unity/Install.ps1 again.");
+                enabled = false;
+                return;
+            }
+            _material = new Material(shader);
+            _material.color = new Color(0.2f, 0.65f, 0.75f);
+            _world = new GameObject("Movement Test World");
+            CreateBox("Floor", new Vector3(0, -0.15f, 0), new Vector3(100, 0.2f, 100));
+            for (int i = -5; i <= 5; i++)
+            {
+                CreateBox("X landmark", new Vector3(i * 5, 0.01f, 0), new Vector3(0.08f, 0.02f, 50));
+                CreateBox("Z landmark", new Vector3(0, 0.01f, i * 5), new Vector3(50, 0.02f, 0.08f));
+            }
+            _camera = Camera.main;
+            if (_camera == null)
+            {
+                _camera = new GameObject("Movement Camera").AddComponent<Camera>();
+            }
+            _camera.transform.position = new Vector3(0, EYE_HEIGHT_METERS, 0);
+            _camera.transform.rotation = Quaternion.identity;
+            _camera.clearFlags = CameraClearFlags.SolidColor;
+            _camera.backgroundColor = new Color(0.08f, 0.1f, 0.16f);
+        }
+
+        private async void Connect()
+        {
+            if (_client != null || _isConnecting)
+            {
+                return;
+            }
+            if (!int.TryParse(_port, out int port) || port < 1 || port > 65535 ||
+                !int.TryParse(_room, out int room) || room <= 0)
+            {
+                _status = "Invalid port or room.";
+                return;
+            }
+            _isConnecting = true;
+            int generation = ++_generation;
+            _cancellation = new CancellationTokenSource();
+            var client = new ConnectionTestClient();
+            _client = client;
+            _status = "Connecting...";
+            try
+            {
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
+                    await client.ConnectAsync(_host, port, timeout.Token);
+                    JoinRoomResponse response = await client.JoinRoomAsync(room, timeout.Token);
+                    if (response.Result != RoomJoinResult.Success)
+                    {
+                        throw new InvalidOperationException("Join failed: " + response.Result);
+                    }
+                    JoinAck ack = await client.WaitForAdmissionAsync(timeout.Token);
+                    if (generation != _generation)
+                    {
+                        return;
+                    }
+                    _playerId = ack.PlayerId;
+                    _camera.transform.position = new Vector3(ack.X, ack.Y + EYE_HEIGHT_METERS, ack.Z);
+                    _status = "Connected. Click Capture mouse to play.";
+                }
+            }
+            catch (Exception error)
+            {
+                if (generation == _generation)
+                {
+                    Disconnect();
+                    _status = error.Message;
+                }
+            }
+            finally
+            {
+                if (generation == _generation)
+                {
+                    _isConnecting = false;
+                }
+            }
+        }
+
+        private void Update()
+        {
+            if (_client == null)
+            {
+                return;
+            }
+            if (_client.Disconnected.IsCompleted)
+            {
+                string reason = _client.DisconnectError?.Message ?? "Server closed connection.";
+                Disconnect();
+                _status = reason;
+                return;
+            }
+            if (_playerId == 0)
+            {
+                return;
+            }
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                ReleaseMouse();
+                _nextInputSeconds = 0;
+            }
+            bool canControl = _hasFocus && Cursor.lockState == CursorLockMode.Locked;
+            if (canControl)
+            {
+                _yawDegrees = Mathf.Repeat(_yawDegrees + Input.GetAxisRaw("Mouse X") * LOOK_SENSITIVITY, DEGREES_PER_TURN);
+                _pitchDegrees = Mathf.Clamp(_pitchDegrees - Input.GetAxisRaw("Mouse Y") * LOOK_SENSITIVITY, -85, 85);
+            }
+            _camera.transform.rotation = Quaternion.Euler(_pitchDegrees, _yawDegrees, 0);
+            WorldSnapshot snapshot = _client.LatestSnapshot;
+            if (snapshot != null && snapshot.ServerTick != _lastTick)
+            {
+                ApplySnapshot(snapshot);
+            }
+            float blend = Mathf.Clamp01((Time.unscaledTime - _snapshotTimeSeconds) / INTERPOLATION_SECONDS);
+            foreach (var pair in _players)
+            {
+                pair.Value.transform.position = Vector3.Lerp(_from[pair.Key], _targets[pair.Key], blend);
+                if (pair.Key == _playerId)
+                {
+                    _camera.transform.position = pair.Value.transform.position + Vector3.up * EYE_HEIGHT_METERS;
+                }
+            }
+
+            // A send can fail synchronously and disconnect. Do not access connection state after starting it.
+            if (!_isSending && Time.unscaledTime >= _nextInputSeconds)
+            {
+                float strafe = canControl ? Axis(KeyCode.D, KeyCode.A) : 0;
+                float forward = canControl ? Axis(KeyCode.W, KeyCode.S) : 0;
+                _nextInputSeconds = Time.unscaledTime + INPUT_INTERVAL_SECONDS;
+                _ = SendInputAsync(strafe, forward);
+            }
+        }
+
+        // Continuations return to Unity's main thread; only one write can be in flight.
+        private async Task SendInputAsync(float strafe, float forward)
+        {
+            ConnectionTestClient client = _client;
+            CancellationTokenSource cancellation = _cancellation;
+            if (client == null || cancellation == null)
+            {
+                return;
+            }
+            int generation = _generation;
+            _isSending = true;
+            try
+            {
+                MoveInput input = MovementInput.FromLocalAxes(_sequence++, strafe, forward, _yawDegrees);
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(TIMEOUT_SECONDS));
+                    await client.SendMoveAsync(input, timeout.Token);
+                }
+            }
+            catch (Exception error)
+            {
+                if (generation == _generation)
+                {
+                    Disconnect();
+                    _status = error.Message;
+                }
+            }
+            finally
+            {
+                if (generation == _generation)
+                {
+                    _isSending = false;
+                }
+            }
+        }
+
+        private void ApplySnapshot(WorldSnapshot snapshot)
+        {
+            _lastTick = snapshot.ServerTick;
+            _snapshotTimeSeconds = Time.unscaledTime;
+            var present = new HashSet<long>();
+            foreach (SnapshotPlayer player in snapshot.Players)
+            {
+                present.Add(player.PlayerId);
+                var position = new Vector3(player.X, player.Y, player.Z);
+                if (!_players.TryGetValue(player.PlayerId, out GameObject actor))
+                {
+                    actor = new GameObject("Player " + player.PlayerId);
+                    actor.transform.SetParent(_world.transform);
+                    actor.transform.position = position;
+                    _players.Add(player.PlayerId, actor);
+                    if (player.PlayerId != _playerId)
+                    {
+                        GameObject body = CreateBox("Body", position + Vector3.up * 0.9f, new Vector3(0.6f, 1.8f, 0.6f));
+                        body.transform.SetParent(actor.transform, true);
+                    }
+                }
+                _from[player.PlayerId] = actor.transform.position;
+                _targets[player.PlayerId] = position;
+            }
+            foreach (long id in new List<long>(_players.Keys))
+            {
+                if (!present.Contains(id))
+                {
+                    Destroy(_players[id]);
+                    _players.Remove(id);
+                    _from.Remove(id);
+                    _targets.Remove(id);
+                }
+            }
+        }
+
+        private void OnGUI()
+        {
+            if (Cursor.lockState == CursorLockMode.Locked)
+            {
+                GUI.Label(new Rect(15, 15, 600, 40), "WASD / Mouse look / Esc unlock | Tick " + _lastTick);
+                GUI.Label(new Rect(Screen.width / 2f, Screen.height / 2f, 20, 20), "+");
+                return;
+            }
+            GUILayout.BeginArea(new Rect(20, 20, 380, 320), GUI.skin.box);
+            GUILayout.Label("DeathWish server-authoritative movement");
+            GUILayout.Label(_status);
+            GUI.enabled = _client == null;
+            GUILayout.Label("Host / Port / Room");
+            _host = GUILayout.TextField(_host);
+            _port = GUILayout.TextField(_port);
+            _room = GUILayout.TextField(_room);
+            if (GUILayout.Button("Connect and join"))
+            {
+                Connect();
+            }
+            GUI.enabled = _playerId != 0;
+            if (GUILayout.Button("Capture mouse"))
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
+            GUI.enabled = _client != null;
+            if (GUILayout.Button("Disconnect"))
+            {
+                Disconnect();
+            }
+            GUI.enabled = true;
+            GUILayout.Label("Tick: " + _lastTick + " / Players: " + _players.Count);
+            GUILayout.Label("WASD: move / Mouse: look / Esc: unlock\nNo prediction, physics or collision.");
+            GUILayout.EndArea();
+        }
+
+        private void OnApplicationFocus(bool hasFocus)
+        {
+            _hasFocus = hasFocus;
+            _nextInputSeconds = 0;
+            if (!hasFocus)
+            {
+                ReleaseMouse();
+            }
+        }
+
+        private void OnDisable() => Disconnect();
+
+        private void Disconnect()
+        {
+            ++_generation;
+            _cancellation?.Cancel();
+            _client?.Dispose();
+            _cancellation?.Dispose();
+            _cancellation = null;
+            _client = null;
+            _isConnecting = false;
+            _isSending = false;
+            _playerId = 0;
+            _lastTick = 0;
+            _sequence = 0;
+            foreach (GameObject actor in _players.Values)
+            {
+                Destroy(actor);
+            }
+            _players.Clear();
+            _from.Clear();
+            _targets.Clear();
+            ReleaseMouse();
+            _status = "Disconnected";
+        }
+
+        private void OnDestroy()
+        {
+            Destroy(_world);
+            Destroy(_cube);
+            Destroy(_material);
+        }
+
+        private static void ReleaseMouse()
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        private static float Axis(KeyCode positive, KeyCode negative) =>
+            (Input.GetKey(positive) ? 1 : 0) - (Input.GetKey(negative) ? 1 : 0);
+
+        private GameObject CreateBox(string name, Vector3 position, Vector3 scale)
+        {
+            var box = new GameObject(name);
+            box.transform.SetParent(_world.transform);
+            box.transform.position = position;
+            box.transform.localScale = scale;
+            box.AddComponent<MeshFilter>().sharedMesh = _cube;
+            var renderer = box.AddComponent<MeshRenderer>();
+            renderer.sharedMaterial = _material;
+            var properties = new MaterialPropertyBlock();
+            Color color = name == "Floor" ? new Color(0.12f, 0.16f, 0.2f) : new Color(0.2f, 0.65f, 0.75f);
+            properties.SetColor("_Color", color);
+            renderer.SetPropertyBlock(properties);
+            return box;
+        }
+
+        private static Mesh CreateCubeMesh()
+        {
+            var mesh = new Mesh();
+            mesh.vertices = new[] {
+                new Vector3(-.5f,-.5f,-.5f), new Vector3(.5f,-.5f,-.5f),
+                new Vector3(.5f,.5f,-.5f), new Vector3(-.5f,.5f,-.5f),
+                new Vector3(-.5f,-.5f,.5f), new Vector3(.5f,-.5f,.5f),
+                new Vector3(.5f,.5f,.5f), new Vector3(-.5f,.5f,.5f) };
+            mesh.triangles = new[] { 0,2,1,0,3,2,4,5,6,4,6,7,0,4,7,0,7,3,
+                1,2,6,1,6,5,3,7,6,3,6,2,0,1,5,0,5,4 };
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+    }
+}

@@ -1,0 +1,197 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
+using System.Threading.Tasks;
+using UnityEngine;
+
+namespace DeathWish.Client
+{
+    public sealed class ConnectionTest : MonoBehaviour
+    {
+        private readonly ConcurrentQueue<ConnectionEvent> _events = new ConcurrentQueue<ConnectionEvent>();
+        private readonly List<string> _logs = new List<string>();
+        private CancellationTokenSource _cancellation;
+        private string _address = "127.0.0.1";
+        private string _port = "7777";
+        private string _status = "Disconnected";
+        private int _attempt;
+        private bool _busy;
+        private Vector2 _scroll;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void CreateTestScreen()
+        {
+            if (FindFirstObjectByType<ConnectionTest>() == null)
+            {
+                var screen = new GameObject("Connection Test");
+                screen.AddComponent<ConnectionTest>();
+                DontDestroyOnLoad(screen);
+            }
+        }
+
+        private void Update()
+        {
+            while (_events.TryDequeue(out var message))
+            {
+                if (message.Attempt != _attempt)
+                {
+                    continue;
+                }
+
+                _status = message.Status;
+                _busy = !message.Finished;
+                AddLog(message.Text);
+            }
+        }
+
+        private void OnGUI()
+        {
+            GUILayout.BeginArea(new Rect(20, 20, Mathf.Max(300, Screen.width - 40), Mathf.Max(250, Screen.height - 40)), GUI.skin.box);
+            GUILayout.Label("DeathWish TCP Connection Test");
+            GUILayout.Label("Status: " + _status);
+
+            GUI.enabled = !_busy;
+            GUILayout.Label("Server IP");
+            _address = GUILayout.TextField(_address);
+            GUILayout.Label("Port");
+            _port = GUILayout.TextField(_port);
+            if (GUILayout.Button("Connect"))
+            {
+                Connect();
+            }
+
+            GUI.enabled = _busy;
+            if (GUILayout.Button("Disconnect"))
+            {
+                Disconnect();
+            }
+
+            GUI.enabled = true;
+            GUILayout.Label("Stage 1 accepts connections without sending a game response.");
+            _scroll = GUILayout.BeginScrollView(_scroll);
+            foreach (var line in _logs)
+            {
+                GUILayout.Label(line);
+            }
+            GUILayout.EndScrollView();
+            GUILayout.EndArea();
+        }
+
+        private void Connect()
+        {
+            if (!IPAddress.TryParse(_address, out var address) ||
+                !int.TryParse(_port, out var port) || port < 1 || port > 65535)
+            {
+                AddLog("Enter a valid IP address and a port from 1 to 65535.");
+                return;
+            }
+
+            _cancellation?.Dispose();
+            _cancellation = new CancellationTokenSource();
+            _busy = true;
+            _status = "Connecting";
+            var attempt = ++_attempt;
+            var token = _cancellation.Token;
+
+            AddLog("Connecting to " + address + ":" + port);
+            _ = Task.Run(() => RunConnectionAsync(address, port, attempt, token));
+        }
+
+        private async Task RunConnectionAsync(IPAddress address, int port, int attempt, CancellationToken token)
+        {
+            try
+            {
+                using (var client = new TcpClient(address.AddressFamily))
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
+                using (timeout.Token.Register(() => client.Dispose()))
+                {
+                    timeout.CancelAfter(TimeSpan.FromSeconds(10));
+                    try
+                    {
+                        await client.ConnectAsync(address, port).ConfigureAwait(false);
+                    }
+                    catch (Exception) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
+                    {
+                        Publish(attempt, "Disconnected", "Connection timed out after 10 seconds.", true);
+                        return;
+                    }
+                    timeout.CancelAfter(Timeout.Infinite);
+                    token.ThrowIfCancellationRequested();
+                    Publish(attempt, "Connected", "TCP connection established.", false);
+
+                    var stream = client.GetStream();
+                    var buffer = new byte[4096];
+                    while (true)
+                    {
+                        var count = await stream.ReadAsync(buffer, 0, buffer.Length, token).ConfigureAwait(false);
+                        if (count == 0)
+                        {
+                            Publish(attempt, "Disconnected", "Server closed the connection.", true);
+                            return;
+                        }
+
+                        Publish(attempt, "Connected", "Received " + count + " bytes: " + BitConverter.ToString(buffer, 0, count), false);
+                    }
+                }
+            }
+            catch (Exception) when (token.IsCancellationRequested)
+            {
+                Publish(attempt, "Disconnected", "Disconnected by client.", true);
+            }
+            catch (Exception exception)
+            {
+                Publish(attempt, "Disconnected", "Connection error: " + exception.Message, true);
+            }
+        }
+
+        private void Publish(int attempt, string status, string text, bool finished)
+        {
+            _events.Enqueue(new ConnectionEvent(attempt, status, text, finished));
+        }
+
+        private void Disconnect()
+        {
+            ++_attempt;
+            _cancellation?.Cancel();
+            _cancellation?.Dispose();
+            _cancellation = null;
+            _busy = false;
+            _status = "Disconnected";
+            AddLog("Disconnected by client.");
+        }
+
+        private void OnDisable()
+        {
+            Disconnect();
+        }
+
+        private void AddLog(string text)
+        {
+            if (_logs.Count == 60)
+            {
+                _logs.RemoveAt(0);
+            }
+            _logs.Add(DateTime.Now.ToString("HH:mm:ss") + " " + text);
+            _scroll.y = float.MaxValue;
+        }
+
+        private readonly struct ConnectionEvent
+        {
+            public readonly int Attempt;
+            public readonly string Status;
+            public readonly string Text;
+            public readonly bool Finished;
+
+            public ConnectionEvent(int attempt, string status, string text, bool finished)
+            {
+                Attempt = attempt;
+                Status = status;
+                Text = text;
+                Finished = finished;
+            }
+        }
+    }
+}
