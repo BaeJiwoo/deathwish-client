@@ -6,3 +6,20 @@
 /UserSettings/
 *.csproj
 *.sln
+
+# Local recordings and build output
+/Recordings/
+/Builds/
+
+# Local IDE and agent settings
+/.vs/
+/.idea/
+/.codex/
+*.suo
+*.user
+
+# Local environment secrets
+.env
+.env.*
+!.env.example
+!.env.template
