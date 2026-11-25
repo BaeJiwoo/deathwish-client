@@ -63,3 +63,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\integrations\Unity\Install
 | 두 명이 접속했는데 Players가 1 | 서버 주소·포트·방 번호 일치 여부 확인. 방을 바꾸려면 Disconnect 후 다시 입장 |
 | 이동은 되지만 점프·좌클릭 시 연결 종료 | 서버와 클라이언트가 모두 점프·레이캐스트 패킷을 지원하는 버전인지 확인 후 연동 파일 갱신 |
 | MockClient에서 `/wasd`를 사용할 수 없음 | 위 런처가 여는 독립 Windows Console Host 사용. VS Code 통합 터미널에서는 `/join 2` 후 `/move 1 0`으로 이동 입력 확인 |
+
+## 서버 권위 걷기 애니메이션
+
+1. 서버와 Unity 클라이언트에서 `codex/server-authoritative-animation` 브랜치를 함께 사용합니다. 서버 주소와 포트를 입력하고 방 1에 입장한 뒤 **Capture input**을 누릅니다.
+2. WASD로 이동하면 서버가 계산한 방향과 관절로 캐릭터가 걷습니다. 키를 놓거나 PhysicsLab의 벽을 향해 계속 이동하면 정지 자세로 표시됩니다.
+3. 같은 방의 두 번째 Unity나 MockClient를 움직여 원격 캐릭터의 위치와 관절도 함께 바뀌는지 확인합니다. 서버 프레임이 잠시 멈추면 마지막 수신 자세에서 멈춥니다.
+
+**Use Server Animation**은 `SyncTestController` Inspector의 연결 설정입니다. 위치 스냅샷만 지원하는 서버에 접속할 때는 설정을 끈 뒤 연결합니다.
+
+DeathWish는 11본 리그와 1초 길이의 제자리 걷기를 사용합니다. 서버의 위치와 자세는 100ms 지연 타임라인에서 보간합니다. 부위별 박스 10개는 포즈를 따라 움직이고, 레이캐스트는 기존 서버 충돌체를 사용합니다.
