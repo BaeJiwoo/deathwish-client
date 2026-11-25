@@ -26,8 +26,8 @@ namespace DeathWish.Client
         private const int RING_SEGMENTS = 20;
         private const float MISS_RANGE_METERS = 100f;
         private const float TRAVEL_SECONDS = 0.07f;
-        private const float TRAIL_SECONDS = 0.17f;
-        private const float IMPACT_SECONDS = 0.24f;
+        private const float TRAIL_SECONDS = 0.22f;
+        private const float IMPACT_SECONDS = 0.30f;
         private const float GIZMO_SECONDS = 4f;
         private const string NUMBER = @"(-?\d+\.\d{2})";
         private static readonly Regex HitReport = new Regex(
@@ -36,6 +36,7 @@ namespace DeathWish.Client
         private static readonly Color TrailColor = new Color(1f, 0.83f, 0.34f);
         private static readonly Color TerrainColor = new Color(1f, 0.55f, 0.12f);
         private static readonly Color PlayerColor = new Color(1f, 0.2f, 0.32f);
+        private static readonly Color TeammateColor = new Color(0.5f, 0.75f, 1f);
         private readonly Transform _parent;
         private readonly Material _material;
         private readonly Effect[] _history = new Effect[HISTORY_SIZE];
@@ -100,6 +101,28 @@ namespace DeathWish.Client
             {
                 return;
             }
+            ShowTrail(origin, end, shot.TrailStart, shot.Aim.direction, hasHit, hitPlayer ? PlayerColor : TerrainColor, now);
+        }
+
+        internal void ShowArenaShot(Vector3 origin, Vector3 end, Vector3 trailStart, ArenaShotOutcome outcome, float now)
+        {
+            Vector3 displacement = end - origin;
+            if (displacement.sqrMagnitude <= 0.0001f)
+            {
+                return;
+            }
+            Color impact = outcome switch
+            {
+                ArenaShotOutcome.Damage => PlayerColor,
+                ArenaShotOutcome.PlayerContact => TeammateColor,
+                _ => TerrainColor
+            };
+            ShowTrail(origin, end, trailStart, displacement.normalized, outcome != ArenaShotOutcome.Miss, impact, now);
+        }
+
+        private void ShowTrail(Vector3 origin, Vector3 end, Vector3 trailStart, Vector3 direction, bool hasHit,
+            Color impactColor, float now)
+        {
             Effect effect = _history[_next];
             if (effect == null)
             {
@@ -114,16 +137,16 @@ namespace DeathWish.Client
                 _history[_next] = effect;
             }
             _next = (_next + 1) % HISTORY_SIZE;
-            effect.Start = shot.TrailStart;
+            effect.Start = trailStart;
             effect.Origin = origin;
             effect.End = end;
             effect.HasHit = hasHit;
-            effect.HitColor = hitPlayer ? PlayerColor : TerrainColor;
+            effect.HitColor = impactColor;
             effect.StartSeconds = now;
             effect.GizmoUntil = now + GIZMO_SECONDS;
             effect.IsVisible = true;
-            effect.Impact.transform.SetPositionAndRotation(end - shot.Aim.direction * 0.025f,
-                Quaternion.LookRotation(shot.Aim.direction));
+            effect.Impact.transform.SetPositionAndRotation(end - direction * 0.025f,
+                Quaternion.LookRotation(direction));
             Animate(effect, 0f);
         }
 
@@ -208,8 +231,14 @@ namespace DeathWish.Client
             {
                 if (effect != null)
                 {
-                    effect.Trail.enabled = false;
-                    effect.Impact.enabled = false;
+                    if (effect.Trail != null)
+                    {
+                        effect.Trail.enabled = false;
+                    }
+                    if (effect.Impact != null)
+                    {
+                        effect.Impact.enabled = false;
+                    }
                     effect.IsVisible = false;
                     effect.GizmoUntil = float.NegativeInfinity;
                 }

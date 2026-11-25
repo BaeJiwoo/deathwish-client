@@ -7,6 +7,7 @@ Shader "DeathWish/SyncTestWorld"
         _Wall ("Wall panels", Float) = 0
         _FloorHalfSize ("Floor half size (m)", Float) = 50
         _Caution ("Caution paint", Float) = 0
+        _Solid ("Solid color", Float) = 0
     }
     SubShader
     {
@@ -24,6 +25,7 @@ Shader "DeathWish/SyncTestWorld"
             float _Wall;
             float _FloorHalfSize;
             float _Caution;
+            float _Solid;
 
             struct Varyings
             {
@@ -95,6 +97,10 @@ Shader "DeathWish/SyncTestWorld"
                 }
                 float h = input.localPosition.y;
                 float shade = 0.64 + 0.36 * saturate(dot(n, normalize(float3(-0.45, 0.8, -0.55))));
+                if (_Solid > 0.5)
+                {
+                    return float4(_Color.rgb * shade, 1);
+                }
                 float3 shell = lerp(float3(0.92, 0.96, 0.98), _Color.rgb, step(0.12, h));
                 shell = lerp(shell, float3(0.10, 0.17, 0.24), step(0.42, h) * step(h, 0.57));
                 shell = lerp(shell, _Color.rgb, step(-0.58, h) * step(h, -0.46));

@@ -5,4 +5,5 @@
 | 날짜 | 주요 작업 |
 | --- | --- |
 | [2026-11-22](2026-11-22.md) | 점프·레이캐스트 연동, 실행 및 2인 테스트 가이드 정리 |
-| [2026-11-24](2026-11-24.md) | Ignore local artifacts and untrack recordings |
+| [2026-11-24](2026-11-24.md) | Team deathmatch arena, HUD, physics courses, box weapon and replicated firing |
+| [2026-11-26](2026-11-26.md) | Temporary team deathmatch snapshot and asset consistency check |
