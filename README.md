@@ -4,11 +4,17 @@
 
 DeathWish 게임 서버에 접속해 방 입장, 3인칭 이동, 점프와 레이캐스트를 확인하는 Unity PC 클라이언트입니다. 클라이언트는 입력을 전송하고 서버 스냅숏을 화면에 표시합니다. 이동·충돌·명중 판정은 게임 서버에서 처리합니다.
 
+## AR 조준·보행·사격 테스트
+
+![원격 Bob의 AR 사격과 이동 중 반동을 보여 주는 Unity 테스트](docs/media/shooter-aim-walk.gif)
+
+로컬 TCP 서버에 접속한 Unity에서 원격 Bob을 촬영했습니다. Bob은 에셋 저장소의 AR 소총을 오른손으로 쥐고 왼손으로 앞부분을 받칩니다. 제자리에서 시선을 옮기거나 옆으로 이동해도 총구는 카메라 방향을 따릅니다. 좌클릭하면 ShooterPack의 `idle aiming.fbx` 상체 자세에 짧은 반동을 합성합니다. 같은 방의 다른 플레이어에게도 발사가 보이고, 하체는 서버의 보행 주기로 `walk forward.fbx`를 계속 재생합니다.
+
 ## 빠른 실행
 
 다른 플레이어의 이동을 확인하려면 두 클라이언트를 같은 서버의 같은 방에 접속시키세요.
 
-1. **서버** 저장소 루트에서 아래 PowerShell 명령을 실행하고 `Listening on` 로그를 확인합니다. 서버에는 .NET 10 SDK가 필요합니다. 점프·레이캐스트 테스트 기준 브랜치는 양쪽 모두 `feat/jump-and-raycast`입니다.
+1. **서버** 저장소 루트에서 아래 PowerShell 명령을 실행하고 `Listening on` 로그를 확인합니다. 서버에는 .NET 10 SDK가 필요합니다. 카메라 조준 테스트 기준 브랜치는 양쪽 모두 `codex/server-authoritative-animation`입니다.
 
    ```powershell
    $env:SERVER_ROOM_COUNT = '2'
