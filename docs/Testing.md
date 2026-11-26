@@ -72,4 +72,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\integrations\Unity\Install
 
 **Use Server Animation**은 `SyncTestController` Inspector의 연결 설정입니다. 위치 스냅샷만 지원하는 서버에 접속할 때는 설정을 끈 뒤 연결합니다.
 
-DeathWish는 11본 리그와 1초 길이의 제자리 걷기를 사용합니다. 서버의 위치와 자세는 100ms 지연 타임라인에서 보간합니다. 부위별 박스 10개는 포즈를 따라 움직이고, 레이캐스트는 기존 서버 충돌체를 사용합니다.
+DeathWish는 11본 리그와 1초 길이의 제자리 걷기를 사용합니다. Unity는 서버의 위치와 자세를 100ms 지연 타임라인에서 보간하고 Bob의 본에 적용합니다. Bob이 없는 설치본에서는 부위별 박스 10개로 포즈를 확인할 수 있습니다. 레이캐스트는 기존 서버 충돌체를 사용합니다.
+
+Inspector의 **Show Position Gizmos**는 기본으로 켜져 있습니다. 자홍색 원은 최신 수신 서버 틱 위치, 청록색 마름모는 현재 렌더링한 보간 위치를 표시합니다. 두 위치가 다르면 연결선이 나타납니다.
